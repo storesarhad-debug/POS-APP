@@ -1,20 +1,24 @@
-(
-echo __pycache__/
-echo *.pyc
-echo build/
-echo dist/
-echo logs/
-echo backups/
-echo exports/
-echo documents/
-echo reports/
-echo qa/reports/
-echo cloud_config.json
-echo network_config.json
-echo test_*.py
-echo debug_*.py
-echo analyze_*.py
-echo investigate_*.py
-echo find_*.py
-echo check_*.py
-) > .gitignore
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+dist/
+logs/
+backups/
+exports/
+documents/
+reports/
+qa/reports/
+cloud_config.json
+network_config.json
+test_*.py
+debug_*.py
+analyze_*.py
+investigate_*.py
+find_*.py
+check_*.py
+_*.pdf
+_*.png
+_*.html

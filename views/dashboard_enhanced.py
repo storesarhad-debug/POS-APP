@@ -937,123 +937,140 @@ class DashboardEnhanced(QWidget):
             start_dt = datetime.combine(self.start_date, datetime.min.time())
             end_dt = datetime.combine(self.end_date, datetime.max.time())
             
-            # Get COMPLETED sales and refunds separately
+            # SQL aggregation for sales/refunds totals. The old code did .all() and
+            # summed in Python; for "This Year" that loaded 20k+ rows. func.sum lets
+            # the database do it and returns one row.
+            from sqlalchemy import or_, func
+
+            date_filter = (Sale.sale_date >= start_dt, Sale.sale_date <= end_dt)
             # Include NULL status for backward compatibility with existing data
-            from sqlalchemy import or_
-            
-            normal_sales = session.query(Sale).filter(
-                Sale.sale_date >= start_dt,
-                Sale.sale_date <= end_dt,
-                Sale.is_refund != True,
-                or_(Sale.status == 'COMPLETED', Sale.status == 'REFUNDED', Sale.status == None)  # Include old sales with NULL status
-            ).all()
-            
-            refunds = session.query(Sale).filter(
-                Sale.sale_date >= start_dt,
-                Sale.sale_date <= end_dt,
-                Sale.is_refund == True,
-                or_(Sale.status == 'COMPLETED', Sale.status == 'REFUNDED', Sale.status == None)  # Include old refunds with NULL status
-            ).all()
-            
-            # Calculate totals - refunds should reduce total sales
-            total_normal_sales = sum(Decimal(str(s.total_amount or 0)) for s in normal_sales if s.total_amount is not None)
-            total_refunds = sum(abs(Decimal(str(s.total_amount or 0))) for s in refunds if s.total_amount is not None)
-            
+            status_ok = or_(Sale.status == 'COMPLETED', Sale.status == 'REFUNDED', Sale.status == None)
+
+            total_normal_sales = Decimal(str(session.query(func.sum(Sale.total_amount)).filter(
+                *date_filter, Sale.is_refund != True, status_ok
+            ).scalar() or 0))
+            total_refunds = Decimal(str(session.query(func.sum(func.abs(Sale.total_amount))).filter(
+                *date_filter, Sale.is_refund == True, status_ok
+            ).scalar() or 0))
+            total_normal_paid = Decimal(str(session.query(func.sum(Sale.paid_amount)).filter(
+                *date_filter, Sale.is_refund != True, status_ok
+            ).scalar() or 0))
+            total_refund_paid = Decimal(str(session.query(func.sum(func.abs(Sale.paid_amount))).filter(
+                *date_filter, Sale.is_refund == True, status_ok
+            ).scalar() or 0))
+            sales_count = session.query(func.count(Sale.id)).filter(
+                *date_filter, Sale.is_refund != True, status_ok
+            ).scalar() or 0
+
             # NET Sales = Normal Sales - Refunds (this is the correct total)
             total_sales = total_normal_sales - total_refunds
-            sales_count = len(normal_sales)
-            total_paid_on_sales = (
-                sum(Decimal(str(s.paid_amount or 0)) for s in normal_sales if s.paid_amount is not None)
-                - sum(abs(Decimal(str(s.paid_amount or 0))) for s in refunds if s.paid_amount is not None)
-            )
+            total_paid_on_sales = total_normal_paid - total_refund_paid
             new_credit_sales = total_sales - total_paid_on_sales
-            
-            # Debug output
-            print(f"[DASHBOARD] Normal sales: {len(normal_sales)}, Total: Rs {total_normal_sales:,.2f}")
-            print(f"[DASHBOARD] Refunds: {len(refunds)}, Total: Rs {total_refunds:,.2f}")
+
+            print(f"[DASHBOARD] Normal sales: {sales_count}, Total: Rs {total_normal_sales:,.2f}")
+            print(f"[DASHBOARD] Refunds: Rs {total_refunds:,.2f}")
             print(f"[DASHBOARD] Net Sales: Rs {total_sales:,.2f}")
             print(f"[DASHBOARD] New Credit Sales: Rs {new_credit_sales:,.2f}")
             
             # Purchases - Only count RECEIVED or COMPLETED
-            purchases = session.query(Purchase).filter(
+            total_purchases = Decimal(str(session.query(func.sum(Purchase.total_amount)).filter(
                 Purchase.order_date >= start_dt,
                 Purchase.order_date <= end_dt,
                 Purchase.status.in_(['RECEIVED', 'PAID', 'PARTIAL', 'COMPLETED'])
-            ).all()
-            
-            total_purchases = sum(Decimal(str(p.total_amount or 0)) for p in purchases if p.total_amount is not None)
-            
+            ).scalar() or 0))
+
             # Supplier Payments (actual cash paid to suppliers)
             from pos_app.models.database import PurchasePayment
-            supplier_payments = session.query(PurchasePayment).filter(
+            supplier_payments_count = session.query(func.count(PurchasePayment.id)).filter(
                 PurchasePayment.payment_date >= start_dt,
                 PurchasePayment.payment_date <= end_dt,
                 PurchasePayment.status == 'COMPLETED'
-            ).all()
+            ).scalar() or 0
+            total_supplier_payments = Decimal(str(session.query(func.sum(PurchasePayment.amount)).filter(
+                PurchasePayment.payment_date >= start_dt,
+                PurchasePayment.payment_date <= end_dt,
+                PurchasePayment.status == 'COMPLETED'
+            ).scalar() or 0))
 
-            total_supplier_payments = sum(Decimal(str(p.amount or 0)) for p in supplier_payments if p.amount is not None)
-
-            # Debug output
-            print(f"[DASHBOARD] Supplier Payments count: {len(supplier_payments)}")
-            for i, sp in enumerate(supplier_payments):
-                print(f"[DASHBOARD]   Payment {i+1}: ID={sp.id}, Amount=Rs {sp.amount}, Date={sp.payment_date}, PurchaseID={sp.purchase_id}, SupplierID={sp.supplier_id}")
+            print(f"[DASHBOARD] Supplier Payments count: {supplier_payments_count}")
             print(f"[DASHBOARD] Total Supplier Payments: Rs {total_supplier_payments:,.2f}")
-            
+
             # Other Expenses
-            expenses = session.query(Expense).filter(
+            total_expenses = Decimal(str(session.query(func.sum(Expense.amount)).filter(
                 Expense.expense_date >= start_dt,
                 Expense.expense_date <= end_dt
-            ).all()
-            
-            total_expenses = sum(Decimal(str(e.amount or 0)) for e in expenses if e.amount is not None)
-            
-            # Debug output
+            ).scalar() or 0))
+
             print(f"[DASHBOARD] Purchases: Rs {total_purchases:,.2f}")
             print(f"[DASHBOARD] Supplier Payments: Rs {total_supplier_payments:,.2f}")
             print(f"[DASHBOARD] Expenses: Rs {total_expenses:,.2f}")
 
-            def sale_cost(sale):
-                """Estimate COGS from purchase history before falling back to current cost."""
-                cost = Decimal('0')
-                for item in sale.items:
-                    quantity = Decimal(str(item.quantity or 0))
-                    sale_unit_price = Decimal(str(getattr(item, 'unit_price', 0) or 0))
-                    purchase_item = (
-                        session.query(PurchaseItem)
-                        .join(Purchase, PurchaseItem.purchase_id == Purchase.id)
-                        .filter(
-                            PurchaseItem.product_id == item.product_id,
-                            Purchase.order_date <= sale.sale_date,
-                            Purchase.status.in_(['RECEIVED', 'PAID', 'PARTIAL', 'COMPLETED'])
-                        )
-                        .order_by(Purchase.order_date.desc(), PurchaseItem.id.desc())
-                        .first()
-                    )
+            # --- COGS, computed in BULK (this is the freeze fix) ---
+            # The old sale_cost() ran a separate PurchaseItem query for EVERY item of
+            # EVERY sale in the period. For "This Year" that was 100,000+ individual
+            # queries on the UI thread -> the dashboard froze until force-closed.
+            #
+            # Now: 1 query for all sale items in the period + 1 window-function query
+            # for the latest purchase unit_cost per product (as of period end) + 1 query
+            # for product.purchase_price fallbacks. Then a plain Python loop, no per-item SQL.
+            #
+            # Semantic note: cost is now "latest purchase cost as of period END" rather than
+            # "latest cost as of each sale's date". For a dashboard gross-profit estimate this
+            # is an acceptable approximation and removes the O(sales x items) query storm.
+            sale_item_rows = session.query(
+                SaleItem.product_id, SaleItem.quantity, SaleItem.unit_price, Sale.is_refund
+            ).join(Sale, SaleItem.sale_id == Sale.id).filter(
+                *date_filter, status_ok
+            ).all()
 
-                    product_cost = Decimal('0')
-                    if purchase_item is not None:
-                        product_cost = Decimal(str(getattr(purchase_item, 'unit_cost', 0) or 0))
+            # Latest purchase unit_cost per product as of end_dt (window function, one query)
+            rn = func.row_number().over(
+                partition_by=PurchaseItem.product_id,
+                order_by=[Purchase.order_date.desc(), PurchaseItem.id.desc()]
+            ).label('rn')
+            cost_subq = session.query(
+                PurchaseItem.product_id.label('pid'),
+                PurchaseItem.unit_cost.label('unit_cost'),
+                rn,
+            ).join(Purchase, PurchaseItem.purchase_id == Purchase.id).filter(
+                Purchase.order_date <= end_dt,
+                Purchase.status.in_(['RECEIVED', 'PAID', 'PARTIAL', 'COMPLETED'])
+            ).subquery()
+            cost_map = {
+                row.pid: Decimal(str(row.unit_cost or 0))
+                for row in session.query(cost_subq.c.pid, cost_subq.c.unit_cost).filter(cost_subq.c.rn == 1).all()
+            }
 
+            # product.purchase_price fallback for products with no usable purchase history
+            product_ids = {r[0] for r in sale_item_rows if r[0] is not None}
+            pp_map = {}
+            if product_ids:
+                pp_map = {
+                    pid: Decimal(str(pp or 0))
+                    for pid, pp in session.query(Product.id, Product.purchase_price)
+                        .filter(Product.id.in_(product_ids)).all()
+                }
+
+            def _cogs(rows):
+                total = Decimal('0')
+                for product_id, quantity, unit_price, _is_refund in rows:
+                    qty = Decimal(str(quantity or 0))
+                    sale_unit_price = Decimal(str(unit_price or 0))
+                    product_cost = cost_map.get(product_id, Decimal('0'))
                     if product_cost <= 0:
-                        product_cost = Decimal(str(getattr(item.product, 'purchase_price', 0) or 0))
-
-                    # Sanity guard:
-                    # If purchase cost is wildly higher than the selling unit price, it's likely
-                    # a units mismatch (e.g., carton vs piece) or bad purchase data. In that case
-                    # fall back to product.purchase_price, and as a last resort cap by sale price.
+                        product_cost = pp_map.get(product_id, Decimal('0'))
+                    # Sanity guard: if purchase cost is wildly higher than the selling unit
+                    # price (units mismatch / bad data), fall back to purchase_price, else cap.
                     if sale_unit_price > 0 and product_cost > (sale_unit_price * Decimal('10')):
-                        fallback_cost = Decimal(str(getattr(item.product, 'purchase_price', 0) or 0))
+                        fallback_cost = pp_map.get(product_id, Decimal('0'))
                         if fallback_cost > 0 and fallback_cost <= (sale_unit_price * Decimal('10')):
                             product_cost = fallback_cost
                         else:
                             product_cost = sale_unit_price
+                    total += qty * product_cost
+                return total
 
-                    cost += quantity * product_cost
-                return cost
-
-            normal_cogs = sum(sale_cost(sale) for sale in normal_sales)
-            refund_cogs = sum(sale_cost(refund) for refund in refunds)
-            total_cogs = normal_cogs - refund_cogs
+            total_cogs = _cogs([r for r in sale_item_rows if not r[3]]) - _cogs([r for r in sale_item_rows if r[3]])
             gross_profit = total_sales - total_cogs
             
             # Low stock
@@ -1065,14 +1082,12 @@ class DashboardEnhanced(QWidget):
             print(f"[DASHBOARD] Gross Profit: Rs {gross_profit:,.2f}")
             
             # Customer Payments (actual money received from customers)
-            customer_payments = session.query(Payment).filter(
+            total_customer_payments = Decimal(str(session.query(func.sum(Payment.amount)).filter(
                 Payment.payment_date >= start_dt,
                 Payment.payment_date <= end_dt,
                 Payment.status == 'COMPLETED',
                 Payment.customer_id != None
-            ).all()
-            
-            total_customer_payments = sum(Decimal(str(p.amount or 0)) for p in customer_payments if p.amount is not None)
+            ).scalar() or 0))
             
             print(f"[DASHBOARD] Customer Payments: Rs {total_customer_payments:,.2f}")
 

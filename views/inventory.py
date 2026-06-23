@@ -215,6 +215,37 @@ class InventoryWidget(QWidget):
         
         layout.addWidget(self.table)
 
+        # Total stock valuation summary (based on purchase price)
+        valuation_layout = QHBoxLayout()
+        self.valuation_label = QLabel("Total Stock Valuation (Purchase Price): Rs 0.00")
+        self.valuation_label.setStyleSheet("""
+            padding: 12px 16px;
+            background: #f1f5f9;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: bold;
+            color: #1e293b;
+        """)
+        valuation_layout.addWidget(self.valuation_label)
+        valuation_layout.addStretch()
+        layout.addLayout(valuation_layout)
+
+    def _update_valuation(self):
+        """Recalculate and display total stock valuation at purchase price across ALL products."""
+        try:
+            total = 0.0
+            products = getattr(self, '_products_cache', None) or []
+            for p in products:
+                try:
+                    qty = float(getattr(p, 'stock_level', 0) or 0)
+                    price = float(getattr(p, 'purchase_price', 0) or 0)
+                except Exception:
+                    qty = price = 0.0
+                total += qty * price
+            self.valuation_label.setText(f"Total Stock Valuation (Purchase Price): Rs {total:,.2f}")
+        except Exception as e:
+            print(f"[Inventory] Error computing valuation: {e}")
+
     def on_selection_changed(self):
         """Enable/disable action buttons based on selection"""
         selected_rows = self.table.selectionModel().selectedRows()
@@ -998,7 +1029,10 @@ class InventoryWidget(QWidget):
             
             # Only populate visible page items (much faster than loading all)
             self._update_page()
-            
+
+            # Update total stock valuation summary
+            self._update_valuation()
+
             # Update sync timestamp snapshot
             try:
                 from pos_app.models.database import get_sync_timestamp
@@ -1080,7 +1114,10 @@ class InventoryWidget(QWidget):
             
             # Update current page (maintain user's position)
             self._update_page()
-            
+
+            # Update total stock valuation summary
+            self._update_valuation()
+
         except Exception as e:
             print(f"[Inventory] Error refreshing products: {e}")
         finally:

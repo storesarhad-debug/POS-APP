@@ -175,20 +175,28 @@ class DashboardWidget(QWidget):
         return btn
 
     def load_metrics_for_period(self, period):
-        """Load metrics for specific time period"""
+        """Load metrics for specific time period.
+
+        Uses SQL aggregation (func.sum / func.count) so the database does the
+        math instead of loading every Sale row into memory. Without this, picking
+        "This Year" pulled thousands of ORM rows onto the UI thread and froze the app.
+        """
         try:
             from pos_app.models.database import Sale, Customer, Product
-            
+            from sqlalchemy import func, or_
+
             # Get controller session
             controller = None
             if 'inventory' in self.controllers:
                 controller = self.controllers['inventory']
             elif 'reports' in self.controllers:
                 controller = self.controllers['reports']
-            
+
             if not controller or not hasattr(controller, 'session'):
                 return {'sales': 0.0, 'revenue': 0.0, 'low_stock': 0, 'active_customers': 0}
-            
+
+            session = controller.session
+
             # Calculate date range based on period
             now = datetime.now()
             if period == 'today':
@@ -207,40 +215,39 @@ class DashboardWidget(QWidget):
             else:
                 start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
                 end_date = now
-            
-            # Query sales for period - separate normal sales and refunds
-            normal_sales = controller.session.query(Sale).filter(
-                Sale.sale_date >= start_date,
-                Sale.sale_date <= end_date,
-                Sale.is_refund != True
-            ).all()
-            
-            refunds = controller.session.query(Sale).filter(
-                Sale.sale_date >= start_date,
-                Sale.sale_date <= end_date,
-                Sale.is_refund == True
-            ).all()
-            
-            # Calculate NET sales (normal sales - refunds)
-            total_normal_sales = sum(s.total_amount or 0 for s in normal_sales)
-            total_refunds = sum(abs(s.total_amount or 0) for s in refunds)
-            total_sales = total_normal_sales - total_refunds
-            
-            # Revenue from completed sales only
-            completed_sales = [s for s in normal_sales if s.status in ('COMPLETED', None)]
-            completed_refunds = [s for s in refunds if s.status in ('COMPLETED', 'REFUNDED', None)]
-            total_revenue = sum(s.total_amount or 0 for s in completed_sales) - sum(abs(s.total_amount or 0) for s in completed_refunds)
-            
+
+            date_filter = (Sale.sale_date >= start_date, Sale.sale_date <= end_date)
+
+            # NET sales = sum(normal sales) - sum(abs(refund totals)), computed in SQL
+            normal_total = session.query(func.sum(Sale.total_amount)).filter(
+                *date_filter, Sale.is_refund != True
+            ).scalar() or 0
+            refund_total = session.query(func.sum(func.abs(Sale.total_amount))).filter(
+                *date_filter, Sale.is_refund == True
+            ).scalar() or 0
+            total_sales = float(normal_total) - float(refund_total)
+
+            # Revenue from completed sales only (status COMPLETED or NULL)
+            completed_normal = session.query(func.sum(Sale.total_amount)).filter(
+                *date_filter, Sale.is_refund != True,
+                or_(Sale.status.is_(None), Sale.status == 'COMPLETED')
+            ).scalar() or 0
+            completed_refunds = session.query(func.sum(func.abs(Sale.total_amount))).filter(
+                *date_filter, Sale.is_refund == True,
+                or_(Sale.status.is_(None), Sale.status.in_(['COMPLETED', 'REFUNDED']))
+            ).scalar() or 0
+            total_revenue = float(completed_normal) - float(completed_refunds)
+
             # Low stock products
-            low_stock = controller.session.query(Product).filter(
+            low_stock = session.query(Product).filter(
                 Product.stock_level <= Product.reorder_level
             ).count()
-            
+
             # Active customers
-            active_customers = controller.session.query(Customer).filter(
+            active_customers = session.query(Customer).filter(
                 Customer.is_active == True
             ).count()
-            
+
             return {
                 'sales': total_sales,
                 'revenue': total_revenue,

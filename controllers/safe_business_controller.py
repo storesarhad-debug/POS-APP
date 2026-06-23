@@ -7,6 +7,41 @@ class SafeBusinessController(BusinessController):
     
     @report_crashes
     def create_sale(self, *args, **kwargs):
+        # Pre-flight guard: a refund must never exceed the remaining
+        # (not-yet-refunded) quantity of its original sale. Enforced here in
+        # the wrapper rather than in BusinessController, and it covers every
+        # create_sale caller (sales, wholesale, qa, tests). Without this, the
+        # refund branch in the parent blindly adds `quantity` to stock_level,
+        # inflating inventory (phantom stock) and over-refunding the customer.
+        # Signature: create_sale(customer_id, items, is_wholesale=False,
+        #   payment_method='Cash', paid_amount=0.0, is_refund=False,
+        #   refund_of_sale_id=None, discount_amount=0.0)
+        is_refund = kwargs.get('is_refund', args[5] if len(args) > 5 else False)
+        if is_refund:
+            refund_of_sale_id = kwargs.get(
+                'refund_of_sale_id', args[6] if len(args) > 6 else None
+            )
+            items = kwargs.get('items', args[1] if len(args) > 1 else None)
+            if refund_of_sale_id is None:
+                raise ValueError(
+                    "Refund requires an original sale (refund_of_sale_id is missing)."
+                )
+            if items:
+                remaining = self.get_remaining_refund_capacity(refund_of_sale_id) or {}
+                aggregated = self._aggregate_item_quantities(items)
+                for product_id, qty in aggregated.items():
+                    remaining_qty = remaining.get(product_id, None)
+                    if remaining_qty is None:
+                        raise ValueError(
+                            f"Cannot refund product {product_id}: it was not part of "
+                            f"the original sale."
+                        )
+                    if qty > remaining_qty:
+                        raise ValueError(
+                            f"Refund exceeds remaining capacity for product "
+                            f"{product_id}: {remaining_qty} left to refund, "
+                            f"{qty} requested."
+                        )
         return super().create_sale(*args, **kwargs)
     
     @report_crashes

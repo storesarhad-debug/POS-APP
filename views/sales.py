@@ -1095,9 +1095,21 @@ class ReceiptPreviewDialog(QDialog):
 
                     txt_lines.append(('BODY', f"Customer: {customer.get('name', '')}"))
 
-                    txt_lines.append(('BODY', f"Balance: {customer.get('balance', 0):,.2f}"))
+                    # For wholesale customers, show previous and new balance around this sale
 
-                
+                    prev_bal = customer.get('prev_balance')
+
+                    new_bal = customer.get('new_balance')
+
+                    if prev_bal is not None and new_bal is not None:
+
+                        txt_lines.append(('BODY', f"Previous Balance: Rs {prev_bal:,.2f}"))
+
+                        txt_lines.append(('BODY', f"New Balance:      Rs {new_bal:,.2f}"))
+
+                    else:
+
+                        txt_lines.append(('BODY', f"Balance: {customer.get('balance', 0):,.2f}"))
 
                 # Items header - highlighted with thicker border for products section
 
@@ -13417,6 +13429,14 @@ class SalesWidget(QWidget):
 
             print(f"[DEBUG] Current cart has {len(self.current_cart)} items")
 
+            # Reset wholesale balance capture (populated for wholesale sales only)
+
+            self._receipt_prev_balance = None
+
+            self._receipt_new_balance = None
+
+            self._receipt_customer_obj = None
+
             if not self.current_cart:
 
                 print("[DEBUG] Cart is empty, returning")
@@ -13673,6 +13693,31 @@ class SalesWidget(QWidget):
 
                 print(f"[DEBUG] Creating sale with {len(items)} items")
 
+                # Capture previous balance (before sale) for wholesale customer receipt
+
+                try:
+
+                    if customer_id:
+
+                        from pos_app.models.database import Customer
+
+                        cust_obj = self.controller.session.query(Customer).get(customer_id)
+
+                        if cust_obj and (
+                            str(getattr(cust_obj, 'type', '') or '').upper() == 'WHOLESALE'
+                            or self.is_wholesale_selected()
+                        ):
+
+                            self._receipt_prev_balance = float(getattr(cust_obj, 'current_credit', 0) or 0)
+
+                            self._receipt_customer_obj = cust_obj
+
+                            print(f"[DEBUG] Wholesale prev balance captured: Rs {self._receipt_prev_balance:.2f}")
+
+                except Exception as e:
+
+                    print(f"[DEBUG] Error capturing previous balance: {e}")
+
                 # Create the sale
 
                 sale = self.controller.create_sale(
@@ -13696,6 +13741,28 @@ class SalesWidget(QWidget):
                 )
 
                 print(f"[DEBUG] Sale created successfully: {getattr(sale, 'id', 'N/A')}")
+
+                # Capture new balance (after sale) for wholesale customer receipt
+
+                try:
+
+                    if self._receipt_customer_obj is not None:
+
+                        try:
+
+                            self.controller.session.refresh(self._receipt_customer_obj)
+
+                        except Exception:
+
+                            pass
+
+                        self._receipt_new_balance = float(getattr(self._receipt_customer_obj, 'current_credit', 0) or 0)
+
+                        print(f"[DEBUG] Wholesale new balance captured: Rs {self._receipt_new_balance:.2f}")
+
+                except Exception as e:
+
+                    print(f"[DEBUG] Error capturing new balance: {e}")
 
 
 
@@ -13912,6 +13979,24 @@ class SalesWidget(QWidget):
                         'payment_method': pay_method  # Add payment method to receipt data
 
                     }
+
+                    # Attach wholesale customer balance info for receipt (prev/new balance lines)
+
+                    if customer_id and getattr(self, '_receipt_prev_balance', None) is not None:
+
+                        receipt_data['customer'] = {
+
+                            'name': customer_name,
+
+                            'balance': float(getattr(self, '_receipt_new_balance', 0) or 0),
+
+                            'prev_balance': getattr(self, '_receipt_prev_balance', None),
+
+                            'new_balance': getattr(self, '_receipt_new_balance', None),
+
+                        }
+
+                        print(f"[DEBUG] Receipt data wholesale customer balance attached: prev={receipt_data['customer']['prev_balance']} new={receipt_data['customer']['new_balance']}")
 
                     print(f"[DEBUG] Receipt data payment_method: {receipt_data['payment_method']}")
 

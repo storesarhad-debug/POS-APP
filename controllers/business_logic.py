@@ -1,6 +1,6 @@
 """Business logic controller for POS operations"""
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, time
 from typing import List, Dict, Optional, Any
 import logging
 
@@ -341,12 +341,19 @@ class BusinessController:
         return self.session.query(Supplier).all()
     
     def list_expenses(self, start_date=None, end_date=None) -> List[Expense]:
-        """Get all expenses, optionally filtered by date range"""
+        """Get all expenses, optionally filtered by date range.
+
+        expense_date is a DateTime column, so a plain date comparison would
+        treat the end date as midnight and exclude expenses recorded later on
+        that same day. Convert to datetime boundaries to include the full day.
+        """
         query = self.session.query(Expense)
         if start_date:
-            query = query.filter(Expense.expense_date >= start_date)
+            start_dt = datetime.combine(start_date, time.min)
+            query = query.filter(Expense.expense_date >= start_dt)
         if end_date:
-            query = query.filter(Expense.expense_date <= end_date)
+            end_dt = datetime.combine(end_date, time.max)
+            query = query.filter(Expense.expense_date <= end_dt)
         return query.all()
     
     def list_recurring_expenses(self) -> List[Expense]:
