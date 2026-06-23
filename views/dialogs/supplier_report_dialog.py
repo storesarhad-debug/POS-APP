@@ -728,8 +728,8 @@ class SupplierReportDialog(QDialog):
         else:
             rows_html = ""
             for t in transactions:
-                d = self._format_currency(t['debit']) if t['debit'] > 0 else ''
-                c = self._format_currency(t['credit']) if t['credit'] > 0 else ''
+                d = self._format_currency(t['debit']) if t['debit'] > 0 else '—'
+                c = self._format_currency(t['credit']) if t['credit'] > 0 else '—'
                 rows_html += (
                     "<tr>"
                     f"<td>{esc(t['date'])}</td>"
@@ -779,28 +779,35 @@ class SupplierReportDialog(QDialog):
     .label {{ font-weight: bold; color: #333; }}
     .summary-table {{
         width: 100%; border-collapse: collapse; margin-bottom: 6pt;
-        border: 1pt solid #999; table-layout: fixed;
+        border: 1.5pt solid #000; table-layout: fixed;
     }}
     .summary-table td {{
-        width: 25%; padding: 6pt 4pt; text-align: center;
-        border: 1pt solid #ccc; vertical-align: top; background-color: #f9fafb;
+        width: 25%; padding: 7pt 4pt; text-align: center;
+        border: 1pt solid #666; vertical-align: top; background-color: #f9fafb;
     }}
-    .summary-table .slabel {{ font-size: 7pt; color: #555; }}
+    .summary-table .slabel {{ font-size: 7pt; color: #333; }}
     .summary-table .sval {{ font-size: 11pt; font-weight: bold; }}
     .due {{ color: #c00000; }}
     table.txn {{
         width: 100%; border-collapse: collapse; table-layout: fixed;
-        font-size: 9pt; border: 1pt solid #999;
+        font-size: 9pt; border: 1.5pt solid #000;
     }}
     table.txn th, table.txn td {{
-        padding: 5pt 4pt; border: 0.5pt solid #999; vertical-align: top;
+        padding: 6pt 5pt; border: 1pt solid #666; vertical-align: top;
     }}
     table.txn th {{
-        background-color: #eeeeee; font-weight: bold; text-align: center;
+        background-color: #e2e8f0; color: #000; font-weight: bold;
+        text-align: center; font-size: 8.5pt;
     }}
-    table.txn td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
+    table.txn td.numeric {{
+        text-align: right; font-variant-numeric: tabular-nums;
+    }}
     table.txn td.desc {{ text-align: left; }}
-    table.txn tfoot td {{ border-top: 1pt solid #000; font-weight: bold; }}
+    table.txn td.empty {{ text-align: center; color: #666; }}
+    table.txn tfoot td {{
+        border-top: 1.5pt solid #000; border-bottom: 1.5pt solid #000;
+        font-weight: bold; background-color: #f9fafb;
+    }}
     .empty {{ text-align: center; padding: 12pt 0; color: #666; }}
     .footer {{
         margin-top: 12pt; text-align: center; font-size: 8pt; color: #666;
@@ -836,7 +843,7 @@ class SupplierReportDialog(QDialog):
         </tr>
     </table>
 
-    <table class="txn">
+    <table class="txn" border="1" cellpadding="4">
         <colgroup>
             <col width="12%">
             <col width="28%">
@@ -861,7 +868,7 @@ class SupplierReportDialog(QDialog):
         <tfoot>
             <tr>
                 <td colspan="6" style="text-align:right;">CLOSING OUTSTANDING:</td>
-                <td class="num due">{esc(closing_val)}</td>
+                <td class="numeric due">{esc(closing_val)}</td>
             </tr>
         </tfoot>
     </table>
